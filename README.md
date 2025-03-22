@@ -2,6 +2,8 @@
 
 This project implements YOLOv4 (You Only Look Once version 4) for object detection using PyTorch. The implementation includes training on the Pascal VOC dataset and features modern deep learning techniques such as CSPDarknet53 backbone, PANet feature aggregation, and advanced data augmentation strategies.
 
+The whole project is written by cline+sonnet3.5, my instructions are: "I'd like to write a deeplearning project to learn yolo, the sources modules will be dataloader, yolo model, training and evaluation, datasets is pascal voc, and use tensorboard to show the training status."
+
 ## Project Structure
 ```
 .
