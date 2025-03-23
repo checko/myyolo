@@ -109,15 +109,21 @@ def train():
             optimizer.step()
             scheduler.step()
             
-            # Update metrics
-            epoch_loss += loss_dict['total_loss']
+            # Clip gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            
+            # Get loss values (already converted to float in loss_dict)
+            loss_float = loss.item()
+            
+            # Update metrics (loss_dict values are already floats)
+            epoch_loss += loss_float
             epoch_box_loss += loss_dict['box_loss']
             epoch_obj_loss += loss_dict['obj_loss']
             epoch_class_loss += loss_dict['class_loss']
             
-            # Update progress bar
+            # Update progress bar with current loss
             progress_bar.set_postfix({
-                'loss': f"{loss_dict['loss']:.4f}",
+                'loss': f"{loss_dict['total_loss']:.4f}",
                 'lr': f"{scheduler.get_last_lr()[0]:.6f}"
             })
             

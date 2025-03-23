@@ -75,13 +75,25 @@ class YOLOv4(nn.Module):
             
             return total_loss, loss_dict
         
-        # For validation/inference, return detections and dummy loss values
+        # For inference without targets
         if targets is None:
             detections = self._process_detections(p3_out, p4_out, p5_out)
             return detections, {'total_loss': 0.0, 'box_loss': 0.0, 'obj_loss': 0.0, 'class_loss': 0.0, 'loss': 0.0}
-        else:
-            # For evaluation with targets but not training
-            return torch.tensor(0.0, device=x.device), {'total_loss': 0.0, 'box_loss': 0.0, 'obj_loss': 0.0, 'class_loss': 0.0, 'loss': 0.0}
+        
+        # For validation/evaluation with targets, compute actual loss
+        loss_p3, loss_dict_p3 = self.loss_fn(p3_out, targets, self.head_p3.anchors)
+        loss_p4, loss_dict_p4 = self.loss_fn(p4_out, targets, self.head_p4.anchors)
+        loss_p5, loss_dict_p5 = self.loss_fn(p5_out, targets, self.head_p5.anchors)
+        
+        total_loss = loss_p3 + loss_p4 + loss_p5
+        loss_dict = {
+            'total_loss': total_loss.item(),
+            'box_loss': (loss_dict_p3['box_loss'] + loss_dict_p4['box_loss'] + loss_dict_p5['box_loss']) / 3,
+            'obj_loss': (loss_dict_p3['obj_loss'] + loss_dict_p4['obj_loss'] + loss_dict_p5['obj_loss']) / 3,
+            'class_loss': (loss_dict_p3['class_loss'] + loss_dict_p4['class_loss'] + loss_dict_p5['class_loss']) / 3,
+            'loss': total_loss.item()
+        }
+        return total_loss, loss_dict
 
     def _process_detections(self, p3_out, p4_out, p5_out):
         """Process detection outputs for inference"""

@@ -222,8 +222,13 @@ class YOLOLoss(nn.Module):
         # Calculate union area
         union_area = area1.unsqueeze(-1) + area2 - inter_area
         
-        # Return IoU
-        return inter_area / (union_area + 1e-6)
+        # Increase epsilon for better numerical stability
+        epsilon = 1e-5
+        iou = inter_area / (union_area + epsilon)
+        
+        # Avoid NaN by clamping IoU values
+        iou = torch.clamp(iou, min=0.0, max=1.0)
+        return iou
 
     @staticmethod
     def _compute_ciou(boxes1, boxes2):
@@ -278,17 +283,27 @@ class YOLOLoss(nn.Module):
         # Center distance
         center_dist = (b1_cx - b2_cx).pow(2) + (b1_cy - b2_cy).pow(2)
         
-        # Get aspect ratios
-        w1 = b1_x2 - b1_x1
-        h1 = b1_y2 - b1_y1
-        w2 = b2_x2 - b2_x1
-        h2 = b2_y2 - b2_y1
+        # Get aspect ratios with numerical stability
+        epsilon = 1e-5  # Increased epsilon for better stability
+        w1 = torch.clamp(b1_x2 - b1_x1, min=epsilon)
+        h1 = torch.clamp(b1_y2 - b1_y1, min=epsilon)
+        w2 = torch.clamp(b2_x2 - b2_x1, min=epsilon)
+        h2 = torch.clamp(b2_y2 - b2_y1, min=epsilon)
+        
+        # Compute aspect ratio consistency term with bounded values
         v = (4 / (torch.pi ** 2)) * torch.pow(
             torch.atan(w2 / h2) - torch.atan(w1 / h1), 2
         )
+        v = torch.clamp(v, min=0.0, max=1.0)  # Bound the aspect ratio term
         
-        # Compute CIoU
-        alpha = v / (1 - iou + v + 1e-6)
-        ciou = iou - center_dist / c_diag - alpha * v
+        # Compute CIoU with improved numerical stability
+        with torch.no_grad():
+            alpha = v / (1 - iou + v + epsilon)
+            alpha = torch.clamp(alpha, min=0.0, max=1.0)  # Bound alpha term
         
-        return 1 - ciou
+        # Add small epsilon to c_diag to prevent division by zero
+        c_diag = torch.clamp(c_diag, min=epsilon)
+        ciou = iou - (center_dist / c_diag) - (alpha * v)
+        
+        # Ensure the loss is bounded
+        return torch.clamp(1 - ciou, min=0.0, max=2.0)  # Theoretical range is [0, 2]
