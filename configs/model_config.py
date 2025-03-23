@@ -19,7 +19,7 @@ class ModelConfig:
     ]
     
     # Training
-    BATCH_SIZE = 8
+    BATCH_SIZE = 4
     SUBDIVISIONS = 1  # Subdivide batch to fit in GPU memory
     MAX_EPOCHS = 300
     

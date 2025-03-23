@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .backbone import ConvBNMish
 
 class YOLOHead(nn.Module):
-    def __init__(self, num_classes, anchors, stride):
+    def __init__(self, num_classes, anchors, stride, in_channels):
         """
         Args:
             num_classes (int): Number of classes to detect
@@ -22,7 +22,7 @@ class YOLOHead(nn.Module):
         # Output conv: (num_anchors * (5 + num_classes))
         # 5 = objectness + 4 bbox coordinates
         self.output_conv = nn.Conv2d(
-            in_channels=512,  # This will be changed in the detection module
+            in_channels=in_channels,
             out_channels=self.num_anchors * (5 + num_classes),
             kernel_size=1
         )

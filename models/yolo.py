@@ -17,17 +17,20 @@ class YOLOv4(nn.Module):
         self.head_p3 = YOLOHead(
             num_classes=num_classes,
             anchors=[(12, 16), (19, 36), (40, 28)],
-            stride=8
+            stride=8,
+            in_channels=256  # p3 channel dimension
         )
         self.head_p4 = YOLOHead(
             num_classes=num_classes,
             anchors=[(36, 75), (76, 55), (72, 146)],
-            stride=16
+            stride=16,
+            in_channels=512  # p4 channel dimension
         )
         self.head_p5 = YOLOHead(
             num_classes=num_classes,
             anchors=[(142, 110), (192, 243), (459, 401)],
-            stride=32
+            stride=32,
+            in_channels=1024  # p5 channel dimension
         )
         
         # Initialize weights
