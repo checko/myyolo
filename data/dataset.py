@@ -84,7 +84,29 @@ class VOCDataset(Dataset):
             ymax = float(bbox.find('ymax').text)
             boxes.append([xmin, ymin, xmax, ymax])
         
-        return np.array(boxes, dtype=np.float32), np.array(labels, dtype=np.int64)
+        # Handle empty annotations
+        if not boxes:
+            boxes = np.zeros((0, 4), dtype=np.float32)
+            labels = np.array([], dtype=np.int64)
+        else:
+            boxes = np.array(boxes, dtype=np.float32)
+            labels = np.array(labels, dtype=np.int64)
+        
+        # Ensure boxes are valid
+        if boxes.size > 0:
+            # Ensure boxes are within image bounds
+            boxes = np.clip(boxes, 0, None)  # Prevent negative coordinates
+            
+            # Filter out invalid boxes
+            valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+            boxes = boxes[valid]
+            labels = labels[valid]
+            
+            if len(boxes) == 0:
+                boxes = np.zeros((0, 4), dtype=np.float32)
+                labels = np.array([], dtype=np.int64)
+        
+        return boxes, labels
 
     @staticmethod
     def collate_fn(batch):
@@ -95,9 +117,10 @@ class VOCDataset(Dataset):
         
         for sample in batch:
             images.append(torch.from_numpy(sample['image']).permute(2, 0, 1))
-            boxes.append(torch.from_numpy(sample['boxes']))
-            labels.append(torch.from_numpy(sample['labels']))
-            
+            # Ensure boxes and labels are tensors even when empty
+            boxes.append(torch.from_numpy(sample['boxes']).float())
+            labels.append(torch.from_numpy(sample['labels']).long())
+        
         # Stack images (they should be same size)
         images = torch.stack(images)
         

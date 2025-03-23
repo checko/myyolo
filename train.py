@@ -110,7 +110,7 @@ def train():
             scheduler.step()
             
             # Update metrics
-            epoch_loss += loss_dict['loss']
+            epoch_loss += loss_dict['total_loss']
             epoch_box_loss += loss_dict['box_loss']
             epoch_obj_loss += loss_dict['obj_loss']
             epoch_class_loss += loss_dict['class_loss']
@@ -124,7 +124,7 @@ def train():
             # Log to tensorboard (every 100 iterations)
             if batch_idx % 100 == 0:
                 iteration = epoch * len(train_loader) + batch_idx
-                writer.add_scalar('Loss/train_total', loss_dict['loss'], iteration)
+                writer.add_scalar('Loss/train_total', loss_dict['total_loss'], iteration)
                 writer.add_scalar('Loss/train_box', epoch_box_loss/(batch_idx+1), iteration)
                 writer.add_scalar('Loss/train_obj', epoch_obj_loss/(batch_idx+1), iteration)
                 writer.add_scalar('Loss/train_class', epoch_class_loss/(batch_idx+1), iteration)
@@ -152,7 +152,7 @@ def train():
                 }
                 
                 loss, loss_dict = model(images, targets)
-                val_loss += loss_dict['loss']
+                val_loss += loss_dict['total_loss']  # Use total_loss for consistency
         
         val_loss /= len(val_loader)
         writer.add_scalar('Epoch/val_loss', val_loss, epoch)

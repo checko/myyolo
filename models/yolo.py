@@ -61,13 +61,16 @@ class YOLOv4(nn.Module):
             loss_p4, loss_dict_p4 = self.loss_fn(p4_out, targets, self.head_p4.anchors)
             loss_p5, loss_dict_p5 = self.loss_fn(p5_out, targets, self.head_p5.anchors)
             
-            # Combine losses
+            # Combine losses from all scales
             total_loss = loss_p3 + loss_p4 + loss_p5
+            
+            # Average the component losses across scales
             loss_dict = {
                 'total_loss': total_loss.item(),
-                'p3': loss_dict_p3,
-                'p4': loss_dict_p4,
-                'p5': loss_dict_p5
+                'box_loss': (loss_dict_p3['box_loss'] + loss_dict_p4['box_loss'] + loss_dict_p5['box_loss']) / 3,
+                'obj_loss': (loss_dict_p3['obj_loss'] + loss_dict_p4['obj_loss'] + loss_dict_p5['obj_loss']) / 3,
+                'class_loss': (loss_dict_p3['class_loss'] + loss_dict_p4['class_loss'] + loss_dict_p5['class_loss']) / 3,
+                'loss': total_loss.item()  # For compatibility with training loop
             }
             
             return total_loss, loss_dict

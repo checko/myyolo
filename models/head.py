@@ -89,15 +89,36 @@ class YOLOLoss(nn.Module):
         
         # Process each item in the batch
         for i in range(batch_size):
-            if len(targets['boxes'][i]) == 0:  # Skip if no targets
-                continue
-                
-            # Get targets for this batch item
+            # Initialize empty batch losses
+            batch_obj_loss = torch.zeros(1, device=pred_boxes.device)
+            batch_box_loss = torch.zeros(1, device=pred_boxes.device)
+            batch_class_loss = torch.zeros(1, device=pred_boxes.device)
+            
+            batch_pred_boxes = pred_boxes[i]  # [num_anchors, height, width, 4]
+            
+            # Get batch targets with empty check using numel()
             batch_boxes = targets['boxes'][i]  # tensor of shape [num_targets, 4]
+            if not isinstance(batch_boxes, torch.Tensor):
+                batch_boxes = torch.tensor(batch_boxes, dtype=torch.float32)
+            
+            # Check for empty boxes
+            if batch_boxes.numel() == 0:
+                # All predictions should have zero confidence
+                obj_loss = self.bce_loss(pred_conf[i], torch.zeros_like(pred_conf[i]))
+                batch_obj_loss = obj_loss.mean()
+                total_obj_loss += batch_obj_loss
+                continue
+            
+            # Get labels and ensure proper type
             batch_labels = targets['labels'][i]  # tensor of shape [num_targets]
+            if not isinstance(batch_labels, torch.Tensor):
+                batch_labels = torch.tensor(batch_labels, dtype=torch.long)
+
+            # Move tensors to correct device
+            batch_boxes = batch_boxes.to(pred_boxes.device)
+            batch_labels = batch_labels.to(pred_boxes.device)
             
             # Compute IoU with targets
-            batch_pred_boxes = pred_boxes[i]  # [num_anchors, height, width, 4]
             ious = self._box_iou(
                 batch_pred_boxes.reshape(-1, 4),  # [num_anchors*height*width, 4]
                 batch_boxes
@@ -113,30 +134,49 @@ class YOLOLoss(nn.Module):
             
             # Objectness loss
             obj_loss = self.bce_loss(pred_conf[i], obj_mask)
-            total_obj_loss += obj_loss.mean()
+            batch_obj_loss = obj_loss.mean()
             
-            # Only compute box and class loss for positive samples
-            pos_mask = obj_mask.bool().squeeze(-1)  # [num_anchors, height, width]
-            if pos_mask.any():
-                # Box coordinate loss (using CIoU loss)
+            # Box coordinate loss (using CIoU loss) with validation
+            try:
                 pred_boxes_matched = batch_pred_boxes.reshape(-1, 4)[best_anchor_idx]  # [num_targets, 4]
-                target_boxes_matched = batch_boxes.to(pred_boxes.device)  # [num_targets, 4]
-                ciou_loss = self._compute_ciou(pred_boxes_matched, target_boxes_matched)
-                total_box_loss += ciou_loss.mean()
-                
-                # Class loss
-                pred_cls_matched = pred_cls[i].reshape(-1, self.num_classes)[best_anchor_idx]  # [num_targets, num_classes]
-                target_cls = F.one_hot(batch_labels, self.num_classes).float()  # [num_targets, num_classes]
-                class_loss = self.bce_loss(pred_cls_matched, target_cls)
-                total_class_loss += class_loss.mean()
+                target_boxes_matched = batch_boxes.clone()  # Make sure we don't modify original
+                if pred_boxes_matched.size(0) == target_boxes_matched.size(0):
+                    ciou_loss = self._compute_ciou(pred_boxes_matched, target_boxes_matched)
+                    batch_box_loss = ciou_loss.mean()
+                else:
+                    print(f"Warning: Box size mismatch - pred: {pred_boxes_matched.size()}, target: {target_boxes_matched.size()}")
+                    batch_box_loss = torch.zeros(1, device=pred_boxes.device)
+            except Exception as e:
+                print(f"Warning: Error in box loss computation: {e}")
+                batch_box_loss = torch.zeros(1, device=pred_boxes.device)
             
+            # Ensure labels are valid indices
+            if torch.max(batch_labels) >= self.num_classes:
+                print(f"Warning: Invalid class index detected: {torch.max(batch_labels)}")
+                batch_labels = torch.clamp(batch_labels, 0, self.num_classes - 1)
+                
+            # Class loss with size check
+            try:
+                pred_cls_matched = pred_cls[i].reshape(-1, self.num_classes)[best_anchor_idx]
+                target_cls = F.one_hot(batch_labels, self.num_classes).float()
+                assert pred_cls_matched.size() == target_cls.size(), \
+                    f"Size mismatch: pred_cls {pred_cls_matched.size()} vs target_cls {target_cls.size()}"
+                class_loss = self.bce_loss(pred_cls_matched, target_cls)
+                batch_class_loss = class_loss.mean()
+            except Exception as e:
+                print(f"Warning: Error in class loss computation: {e}")
+                batch_class_loss = torch.tensor(0., device=pred_boxes.device)
+            
+            # Accumulate batch losses
+            total_box_loss += batch_box_loss
+            total_obj_loss += batch_obj_loss
+            total_class_loss += batch_class_loss
             num_targets += 1
         
-        # Average losses over number of targets
-        if num_targets > 0:
-            total_box_loss /= num_targets
-            total_obj_loss /= num_targets
-            total_class_loss /= num_targets
+        # Average losses over batch size (not number of targets)
+        total_box_loss /= batch_size
+        total_obj_loss /= batch_size
+        total_class_loss /= batch_size
         # Weighted sum of losses
         total_loss = (
             self.lambda_coord * total_box_loss +
@@ -144,12 +184,15 @@ class YOLOLoss(nn.Module):
             total_class_loss
         )
         
-        return total_loss, {
-            'loss': total_loss.item(),
-            'box_loss': total_box_loss.item(),
-            'obj_loss': total_obj_loss.item(),
-            'class_loss': total_class_loss.item()
+        # Convert to Python floats to avoid CUDA tensor memory leak
+        loss_dict = {
+            'total_loss': float(total_loss.item()),
+            'loss': float(total_loss.item()),  # Duplicate for compatibility with training loop
+            'box_loss': float(total_box_loss.item()),
+            'obj_loss': float(total_obj_loss.item()),
+            'class_loss': float(total_class_loss.item())
         }
+        return total_loss, loss_dict
 
     @staticmethod
     def _box_iou(boxes1, boxes2):
