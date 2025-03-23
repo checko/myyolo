@@ -1,8 +1,20 @@
 import random
 import cv2
 import numpy as np
-import albumentations as A
-from albumentations.core.transforms_interface import DualTransform
+
+class DualTransform:
+    """Base class for transforms that modify both image and bounding boxes."""
+    def __init__(self, always_apply=False, prob=1.0):
+        self.always_apply = always_apply
+        self.prob = prob
+
+    def __call__(self, *args, **kwargs):
+        if self.always_apply or random.random() < self.prob:
+            return self.apply(*args, **kwargs)
+        return kwargs
+
+    def apply(self, **params):
+        raise NotImplementedError
 
 class Mosaic(DualTransform):
     """
@@ -18,15 +30,6 @@ class Mosaic(DualTransform):
         """
         super().__init__(always_apply, prob)
         self.target_size = target_size
-
-    def apply(self, image, **params):
-        return image
-
-    def apply_to_bbox(self, bbox, **params):
-        return bbox
-
-    def get_transform_init_args_names(self):
-        return ("target_size",)
 
     def _create_mosaic_grid(self, image, quadrant):
         """
@@ -148,7 +151,7 @@ class Mosaic(DualTransform):
 class YOLOAugmentation:
     """
     Implements a comprehensive augmentation pipeline for YOLO training.
-    Includes geometric, color, and noise transforms.
+    Includes geometric, color, and noise transforms using OpenCV.
     """
     def __init__(self, target_size=608, train=True):
         """
@@ -158,74 +161,91 @@ class YOLOAugmentation:
         """
         self.train = train
         self.target_size = target_size
-        self.transform = self._create_transform_pipeline()
 
-    def _create_geometric_transforms(self):
-        """Creates geometric transformation pipeline."""
-        return [
-            Mosaic(target_size=self.target_size, prob=0.5),
-            A.RandomResizedCrop(
-                height=self.target_size,
-                width=self.target_size,
-                scale=(0.8, 1.0),
-                ratio=(0.8, 1.2),
-            ),
-            A.HorizontalFlip(p=0.5),
-        ]
+    def normalize(self, image):
+        """Normalizes image to range [0, 1]."""
+        return image.astype(np.float32) / 255.0
 
-    def _create_color_transforms(self):
-        """Creates color transformation pipeline."""
-        return [
-            A.ColorJitter(
-                brightness=0.5,
-                contrast=0.5,
-                saturation=0.5,
-                hue=0.1,
-                p=0.5
-            ),
-            A.OneOf([
-                A.RandomBrightnessContrast(),
-                A.HueSaturationValue(),
-            ], p=0.3),
-        ]
-
-    def _create_noise_transforms(self):
-        """Creates noise transformation pipeline."""
-        return [
-            A.OneOf([
-                A.GaussNoise(),
-                A.GaussianBlur(),
-                A.MotionBlur(),
-            ], p=0.2),
-        ]
-
-    def _create_transform_pipeline(self):
-        """
-        Creates the complete transformation pipeline based on train/val mode.
+    def resize(self, image, boxes):
+        """Resizes image and updates bounding boxes."""
+        h, w = image.shape[:2]
+        image = cv2.resize(image, (self.target_size, self.target_size))
         
-        Returns:
-            A.Compose: Composed transformation pipeline
-        """
-        if not self.train:
-            transforms = [
-                A.Resize(height=self.target_size, width=self.target_size),
-                A.Normalize(),
-            ]
-        else:
-            transforms = (
-                self._create_geometric_transforms() +
-                self._create_color_transforms() +
-                self._create_noise_transforms() +
-                [A.Normalize()]
-            )
+        if len(boxes) > 0:
+            boxes = boxes.copy()
+            boxes[:, [0, 2]] = boxes[:, [0, 2]] * (self.target_size / w)
+            boxes[:, [1, 3]] = boxes[:, [1, 3]] * (self.target_size / h)
+        
+        return image, boxes
 
-        return A.Compose(
-            transforms,
-            bbox_params=A.BboxParams(
-                format='pascal_voc',
-                label_fields=['labels']
-            )
-        )
+    def random_crop(self, image, boxes, labels):
+        """Performs random crop with box updates."""
+        h, w = image.shape[:2]
+        min_scale = 0.8
+        scale = random.uniform(min_scale, 1.0)
+        
+        new_h = int(h * scale)
+        new_w = int(w * scale)
+        
+        x = random.randint(0, w - new_w)
+        y = random.randint(0, h - new_h)
+        
+        image = image[y:y+new_h, x:x+new_w]
+        
+        if len(boxes) > 0:
+            boxes = boxes.copy()
+            boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]] - x, 0, new_w)
+            boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]] - y, 0, new_h)
+            
+            # Remove boxes that are too small or outside crop
+            valid_boxes = []
+            valid_labels = []
+            
+            for box, label in zip(boxes, labels):
+                if (box[2] - box[0]) > 1 and (box[3] - box[1]) > 1:
+                    valid_boxes.append(box)
+                    valid_labels.append(label)
+            
+            boxes = np.array(valid_boxes) if valid_boxes else np.zeros((0, 4))
+            labels = np.array(valid_labels)
+        
+        return image, boxes, labels
+
+    def horizontal_flip(self, image, boxes):
+        """Performs horizontal flip with box updates."""
+        image = cv2.flip(image, 1)
+        
+        if len(boxes) > 0:
+            w = image.shape[1]
+            boxes = boxes.copy()
+            boxes[:, [0, 2]] = w - boxes[:, [2, 0]]
+        
+        return image, boxes
+
+    def color_jitter(self, image):
+        """Applies color jittering."""
+        # Brightness
+        brightness = random.uniform(0.5, 1.5)
+        image = np.clip(image * brightness, 0, 255).astype(np.uint8)
+        
+        # Contrast
+        contrast = random.uniform(0.5, 1.5)
+        mean = np.mean(image, axis=(0, 1), keepdims=True)
+        image = np.clip((image - mean) * contrast + mean, 0, 255).astype(np.uint8)
+        
+        # Saturation
+        saturation = random.uniform(0.5, 1.5)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = np.expand_dims(gray, -1)
+        image = np.clip(image * saturation + gray * (1 - saturation), 0, 255).astype(np.uint8)
+        
+        return image
+
+    def add_noise(self, image):
+        """Adds Gaussian noise to image."""
+        noise = np.random.normal(0, 10, image.shape).astype(np.uint8)
+        image = np.clip(image + noise, 0, 255).astype(np.uint8)
+        return image
 
     def __call__(self, sample):
         """
@@ -237,14 +257,40 @@ class YOLOAugmentation:
         Returns:
             dict: Transformed sample
         """
-        transformed = self.transform(**{
-            'image': sample['image'],
-            'bboxes': sample['boxes'],
-            'labels': sample['labels']
-        })
+        image = sample['image']
+        boxes = sample['boxes']
+        labels = sample['labels']
+
+        if self.train:
+            # Apply Mosaic augmentation with 50% probability
+            if random.random() < 0.5:
+                result = Mosaic(target_size=self.target_size)(sample)
+                image = result['image']
+                boxes = result['boxes']
+                labels = result['labels']
+            
+            # Random crop
+            if random.random() < 0.5:
+                image, boxes, labels = self.random_crop(image, boxes, labels)
+            
+            # Horizontal flip
+            if random.random() < 0.5:
+                image, boxes = self.horizontal_flip(image, boxes)
+            
+            # Color augmentations
+            if random.random() < 0.5:
+                image = self.color_jitter(image)
+            
+            # Add noise
+            if random.random() < 0.2:
+                image = self.add_noise(image)
+        
+        # Always resize and normalize
+        image, boxes = self.resize(image, boxes)
+        image = self.normalize(image)
         
         return {
-            'image': transformed['image'],
-            'boxes': np.array(transformed['bboxes']) if transformed['bboxes'] else np.zeros((0, 4)),
-            'labels': np.array(transformed['labels'])
+            'image': image,
+            'boxes': boxes,
+            'labels': labels
         }
