@@ -144,7 +144,7 @@ class Mosaic(DualTransform):
         
         return {
             'image': final_mosaic,
-            'boxes': combined_boxes if combined_boxes else np.zeros((0, 4)),
+            'boxes': combined_boxes if len(combined_boxes) > 0 else np.zeros((0, 4)),
             'labels': np.array(combined_labels)
         }
 

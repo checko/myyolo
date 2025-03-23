@@ -80,3 +80,5 @@ wheels/
 
 #dataset folder
 data/pascal_voc
+
+*.jpg
