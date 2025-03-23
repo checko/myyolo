@@ -75,7 +75,13 @@ class YOLOv4(nn.Module):
             
             return total_loss, loss_dict
         
-        return self._process_detections(p3_out, p4_out, p5_out)
+        # For validation/inference, return detections and dummy loss values
+        if targets is None:
+            detections = self._process_detections(p3_out, p4_out, p5_out)
+            return detections, {'total_loss': 0.0, 'box_loss': 0.0, 'obj_loss': 0.0, 'class_loss': 0.0, 'loss': 0.0}
+        else:
+            # For evaluation with targets but not training
+            return torch.tensor(0.0, device=x.device), {'total_loss': 0.0, 'box_loss': 0.0, 'obj_loss': 0.0, 'class_loss': 0.0, 'loss': 0.0}
 
     def _process_detections(self, p3_out, p4_out, p5_out):
         """Process detection outputs for inference"""
