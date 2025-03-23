@@ -77,3 +77,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+#dataset folder
+data/pascal_voc
