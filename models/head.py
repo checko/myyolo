@@ -103,12 +103,13 @@ class YOLOLoss(nn.Module):
                 batch_boxes
             )  # [num_anchors*height*width, num_targets]
             
-            # Find best anchor for each target
+            # Find best prediction for each target
             best_ious, best_anchor_idx = ious.max(dim=0)  # [num_targets]
             
-            # Create object mask
-            obj_mask = torch.zeros_like(pred_conf[i])  # [num_anchors, height, width, 1]
-            obj_mask.view(-1)[best_anchor_idx] = 1
+            # Create object mask (using scatter_ to avoid index errors)
+            obj_mask = torch.zeros(batch_pred_boxes.reshape(-1, 4).shape[0], 1, device=pred_boxes.device)
+            obj_mask.scatter_(0, best_anchor_idx.unsqueeze(1), 1)
+            obj_mask = obj_mask.view(pred_conf[i].shape)
             
             # Objectness loss
             obj_loss = self.bce_loss(pred_conf[i], obj_mask)
@@ -118,17 +119,15 @@ class YOLOLoss(nn.Module):
             pos_mask = obj_mask.bool().squeeze(-1)  # [num_anchors, height, width]
             if pos_mask.any():
                 # Box coordinate loss (using CIoU loss)
-                ciou_loss = self._compute_ciou(
-                    batch_pred_boxes[pos_mask],  # [num_positive, 4]
-                    batch_boxes[torch.where(pos_mask.view(-1))[0]]  # [num_positive, 4]
-                )
+                pred_boxes_matched = batch_pred_boxes.reshape(-1, 4)[best_anchor_idx]  # [num_targets, 4]
+                target_boxes_matched = batch_boxes.to(pred_boxes.device)  # [num_targets, 4]
+                ciou_loss = self._compute_ciou(pred_boxes_matched, target_boxes_matched)
                 total_box_loss += ciou_loss.mean()
                 
                 # Class loss
-                class_loss = self.bce_loss(
-                    pred_cls[i][pos_mask],  # [num_positive, num_classes]
-                    F.one_hot(batch_labels[torch.where(pos_mask.view(-1))[0]], self.num_classes).float()  # [num_positive, num_classes]
-                )
+                pred_cls_matched = pred_cls[i].reshape(-1, self.num_classes)[best_anchor_idx]  # [num_targets, num_classes]
+                target_cls = F.one_hot(batch_labels, self.num_classes).float()  # [num_targets, num_classes]
+                class_loss = self.bce_loss(pred_cls_matched, target_cls)
                 total_class_loss += class_loss.mean()
             
             num_targets += 1
@@ -195,8 +194,26 @@ class YOLOLoss(nn.Module):
         # Move tensors to the same device as boxes1
         boxes2 = boxes2.to(boxes1.device)
         
-        # IoU
-        iou = YOLOLoss._box_iou(boxes1, boxes2)
+        # Get paired IoU (not pairwise)
+        # Convert from [N, 4] tensors to [N, 1, 4] and [1, N, 4] for broadcasting
+        boxes1_expanded = boxes1.unsqueeze(1)  # [N, 1, 4]
+        boxes2_expanded = boxes2.unsqueeze(0)  # [1, N, 4]
+        
+        # Compute areas
+        area1 = (boxes1[..., 2] - boxes1[..., 0]) * (boxes1[..., 3] - boxes1[..., 1])
+        area2 = (boxes2[..., 2] - boxes2[..., 0]) * (boxes2[..., 3] - boxes2[..., 1])
+        
+        # Compute intersection
+        left = torch.maximum(boxes1_expanded[..., 0], boxes2_expanded[..., 0])
+        top = torch.maximum(boxes1_expanded[..., 1], boxes2_expanded[..., 1])
+        right = torch.minimum(boxes1_expanded[..., 2], boxes2_expanded[..., 2])
+        bottom = torch.minimum(boxes1_expanded[..., 3], boxes2_expanded[..., 3])
+        
+        width_height = torch.clamp(right - left, min=0) * torch.clamp(bottom - top, min=0)
+        union = area1.unsqueeze(-1) + area2 - width_height
+        
+        iou = width_height / (union + 1e-6)
+        iou = torch.diagonal(iou)  # Get IoU for matched boxes only
         
         # Get bounding coordinates
         b1_x1, b1_y1, b1_x2, b1_y2 = boxes1.unbind(-1)
