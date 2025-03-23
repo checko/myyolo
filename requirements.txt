@@ -8,3 +8,4 @@ tqdm>=4.60.0
 pycocotools>=2.0.2
 matplotlib>=3.3.4
 PyYAML>=5.4.1
+tqdm
