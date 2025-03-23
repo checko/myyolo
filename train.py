@@ -110,27 +110,21 @@ def train():
             scheduler.step()
             
             # Update metrics
-            epoch_loss += loss_dict['total_loss']
-            epoch_box_loss += (loss_dict['p3']['box_loss'] + 
-                             loss_dict['p4']['box_loss'] + 
-                             loss_dict['p5']['box_loss']) / 3
-            epoch_obj_loss += (loss_dict['p3']['obj_loss'] + 
-                             loss_dict['p4']['obj_loss'] + 
-                             loss_dict['p5']['obj_loss']) / 3
-            epoch_class_loss += (loss_dict['p3']['class_loss'] + 
-                               loss_dict['p4']['class_loss'] + 
-                               loss_dict['p5']['class_loss']) / 3
+            epoch_loss += loss_dict['loss']
+            epoch_box_loss += loss_dict['box_loss']
+            epoch_obj_loss += loss_dict['obj_loss']
+            epoch_class_loss += loss_dict['class_loss']
             
             # Update progress bar
             progress_bar.set_postfix({
-                'loss': f"{loss_dict['total_loss']:.4f}",
+                'loss': f"{loss_dict['loss']:.4f}",
                 'lr': f"{scheduler.get_last_lr()[0]:.6f}"
             })
             
             # Log to tensorboard (every 100 iterations)
             if batch_idx % 100 == 0:
                 iteration = epoch * len(train_loader) + batch_idx
-                writer.add_scalar('Loss/train_total', loss_dict['total_loss'], iteration)
+                writer.add_scalar('Loss/train_total', loss_dict['loss'], iteration)
                 writer.add_scalar('Loss/train_box', epoch_box_loss/(batch_idx+1), iteration)
                 writer.add_scalar('Loss/train_obj', epoch_obj_loss/(batch_idx+1), iteration)
                 writer.add_scalar('Loss/train_class', epoch_class_loss/(batch_idx+1), iteration)
@@ -158,7 +152,7 @@ def train():
                 }
                 
                 loss, loss_dict = model(images, targets)
-                val_loss += loss_dict['total_loss']
+                val_loss += loss_dict['loss']
         
         val_loss /= len(val_loader)
         writer.add_scalar('Epoch/val_loss', val_loss, epoch)

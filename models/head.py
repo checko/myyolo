@@ -82,55 +82,89 @@ class YOLOLoss(nn.Module):
         batch_size = pred_boxes.size(0)
         
         # Compute IoU between predictions and targets
-        ious = self._box_iou(pred_boxes, targets['boxes'])
+        total_box_loss = torch.tensor(0., device=pred_boxes.device)
+        total_obj_loss = torch.tensor(0., device=pred_boxes.device)
+        total_class_loss = torch.tensor(0., device=pred_boxes.device)
+        num_targets = 0
         
-        # Find best anchor for each target
-        best_ious, best_anchor_idx = ious.max(dim=1)
-        
-        # Objectness loss
-        obj_mask = torch.zeros_like(pred_conf)
-        obj_mask[best_anchor_idx] = 1
-        
-        obj_loss = self.bce_loss(pred_conf, obj_mask)
-        obj_loss = obj_loss.mean()
-        
-        # Only compute box loss for positive samples
-        pos_mask = obj_mask > 0
-        if pos_mask.sum() > 0:
-            # Box coordinate loss (using CIoU loss)
-            ciou_loss = self._compute_ciou(
-                pred_boxes[pos_mask],
-                targets['boxes'][best_anchor_idx[pos_mask]]
-            )
-            box_loss = ciou_loss.mean()
+        # Process each item in the batch
+        for i in range(batch_size):
+            if len(targets['boxes'][i]) == 0:  # Skip if no targets
+                continue
+                
+            # Get targets for this batch item
+            batch_boxes = targets['boxes'][i]  # tensor of shape [num_targets, 4]
+            batch_labels = targets['labels'][i]  # tensor of shape [num_targets]
             
-            # Class loss
-            class_loss = self.bce_loss(
-                pred_cls[pos_mask],
-                F.one_hot(targets['labels'][best_anchor_idx[pos_mask]], self.num_classes).float()
-            ).mean()
-        else:
-            box_loss = torch.tensor(0.).to(pred_boxes.device)
-            class_loss = torch.tensor(0.).to(pred_boxes.device)
+            # Compute IoU with targets
+            batch_pred_boxes = pred_boxes[i]  # [num_anchors, height, width, 4]
+            ious = self._box_iou(
+                batch_pred_boxes.reshape(-1, 4),  # [num_anchors*height*width, 4]
+                batch_boxes
+            )  # [num_anchors*height*width, num_targets]
+            
+            # Find best anchor for each target
+            best_ious, best_anchor_idx = ious.max(dim=0)  # [num_targets]
+            
+            # Create object mask
+            obj_mask = torch.zeros_like(pred_conf[i])  # [num_anchors, height, width, 1]
+            obj_mask.view(-1)[best_anchor_idx] = 1
+            
+            # Objectness loss
+            obj_loss = self.bce_loss(pred_conf[i], obj_mask)
+            total_obj_loss += obj_loss.mean()
+            
+            # Only compute box and class loss for positive samples
+            pos_mask = obj_mask.bool().squeeze(-1)  # [num_anchors, height, width]
+            if pos_mask.any():
+                # Box coordinate loss (using CIoU loss)
+                ciou_loss = self._compute_ciou(
+                    batch_pred_boxes[pos_mask],  # [num_positive, 4]
+                    batch_boxes[torch.where(pos_mask.view(-1))[0]]  # [num_positive, 4]
+                )
+                total_box_loss += ciou_loss.mean()
+                
+                # Class loss
+                class_loss = self.bce_loss(
+                    pred_cls[i][pos_mask],  # [num_positive, num_classes]
+                    F.one_hot(batch_labels[torch.where(pos_mask.view(-1))[0]], self.num_classes).float()  # [num_positive, num_classes]
+                )
+                total_class_loss += class_loss.mean()
+            
+            num_targets += 1
         
+        # Average losses over number of targets
+        if num_targets > 0:
+            total_box_loss /= num_targets
+            total_obj_loss /= num_targets
+            total_class_loss /= num_targets
         # Weighted sum of losses
         total_loss = (
-            self.lambda_coord * box_loss +
-            obj_loss +
-            self.lambda_noobj * (1 - obj_mask) * obj_loss +
-            class_loss
+            self.lambda_coord * total_box_loss +
+            total_obj_loss +
+            total_class_loss
         )
         
         return total_loss, {
             'loss': total_loss.item(),
-            'box_loss': box_loss.item(),
-            'obj_loss': obj_loss.item(),
-            'class_loss': class_loss.item()
+            'box_loss': total_box_loss.item(),
+            'obj_loss': total_obj_loss.item(),
+            'class_loss': total_class_loss.item()
         }
 
     @staticmethod
     def _box_iou(boxes1, boxes2):
         """Compute IoU between two sets of boxes"""
+        # Convert boxes to tensors if they're not already
+        if not isinstance(boxes1, torch.Tensor):
+            boxes1 = torch.tensor(boxes1, dtype=torch.float32)
+        if not isinstance(boxes2, torch.Tensor):
+            boxes2 = torch.tensor(boxes2, dtype=torch.float32)
+            
+        # Move tensors to the same device as boxes1
+        boxes2 = boxes2.to(boxes1.device)
+        
+        # Compute areas
         area1 = (boxes1[..., 2] - boxes1[..., 0]) * (boxes1[..., 3] - boxes1[..., 1])
         area2 = (boxes2[..., 2] - boxes2[..., 0]) * (boxes2[..., 3] - boxes2[..., 1])
         
@@ -152,6 +186,15 @@ class YOLOLoss(nn.Module):
     @staticmethod
     def _compute_ciou(boxes1, boxes2):
         """Compute Complete IoU loss between two sets of boxes"""
+        # Convert boxes to tensors if they're not already
+        if not isinstance(boxes1, torch.Tensor):
+            boxes1 = torch.tensor(boxes1, dtype=torch.float32)
+        if not isinstance(boxes2, torch.Tensor):
+            boxes2 = torch.tensor(boxes2, dtype=torch.float32)
+            
+        # Move tensors to the same device as boxes1
+        boxes2 = boxes2.to(boxes1.device)
+        
         # IoU
         iou = YOLOLoss._box_iou(boxes1, boxes2)
         
