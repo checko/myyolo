@@ -115,9 +115,12 @@ class YOLOv4(nn.Module):
                     continue
                 
                 # Get boxes, confidence scores, and class predictions
-                boxes = pred_boxes[sample_idx][conf_mask]
-                conf = conf[conf_mask]
-                cls_pred = cls_pred[conf_mask]
+                # Reshape boxes and mask for proper broadcasting
+                boxes = pred_boxes[sample_idx].reshape(-1, 4)  # Flatten spatial dims
+                conf_mask_flat = conf_mask.reshape(-1)  # Flatten spatial dims
+                conf = conf.reshape(-1)[conf_mask_flat]
+                cls_pred = cls_pred.reshape(-1, cls_pred.size(-1))[conf_mask_flat]
+                boxes = boxes[conf_mask_flat]
                 
                 # Get max class probability and class index
                 cls_conf, cls_idx = cls_pred.max(dim=1)
@@ -213,7 +216,12 @@ if __name__ == "__main__":
     # Quick model test
     model = YOLOv4(num_classes=20)
     x = torch.randn(2, 3, 608, 608)
-    out = model(x)
-    print("Model output for 2 samples:")
-    for sample_dets in out:
-        print(f"Detections shape: {sample_dets.shape}")
+    detections, loss_dict = model(x)  # Handle both return values
+    print("Model test run successful!")
+    print("Loss dict:", loss_dict)
+    print("\nDetections for 2 samples:")
+    for sample_dets in detections:
+        if len(sample_dets) > 0:
+            print(f"Sample detections shape: {sample_dets.shape}")
+        else:
+            print("No detections for this sample")
